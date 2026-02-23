@@ -10,6 +10,18 @@ A Linux system tray application for real-time microphone monitoring via PipeWire
 - **Refresh Sources** to detect newly plugged-in devices without restarting
 - Cleans up all loopback modules on quit (and on next launch if it crashed)
 
+## Getting the Code
+
+Clone the repository to your home folder (or wherever you like):
+```sh
+git clone https://github.com/Tealdragon204/pipewire-tray-mic-monitor.git
+cd pipewire-tray-mic-monitor
+```
+
+> **Tip:** To grab future updates, run `git pull` from inside the folder.
+
+---
+
 ## Dependencies
 
 **System packages** (one of these audio stacks):
