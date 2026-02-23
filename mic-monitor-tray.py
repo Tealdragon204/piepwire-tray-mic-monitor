@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import configparser
+import os
+import struct
 import subprocess
 import sys
 import threading
@@ -11,8 +14,33 @@ available_sources: list = []    # list[SourceInfo]
 active_modules: dict = {}       # source_name -> pactl module_id
 default_source_name: str = ""   # system default input source
 is_muted: bool = False          # mute state of the default source
+_audio_active: bool = False     # audio signal detected above threshold
+_audio_proc: subprocess.Popen | None = None
 left_click_toggle: bool = False
 _mute_poll_stop = threading.Event()
+
+# Color/threshold defaults — overridden by load_config()
+_colors: dict = {
+    "active":   (80, 220, 80, 255),
+    "inactive": (180, 180, 180, 255),
+    "accent":   (220, 60, 60, 255),
+}
+_AUDIO_THRESHOLD: float = 400.0
+
+CONFIG_PATH = os.path.expanduser("~/.config/mic-monitor.conf")
+_DEFAULT_CONFIG = """\
+[colors]
+# Mic color when audio is detected above the noise floor
+active = #50DC50
+# Mic color when silent or muted
+inactive = #B4B4B4
+# Color for the recording dot badge and the mute slash
+accent = #DC3C3C
+
+[audio]
+# RMS threshold (0-32768). Lower = more sensitive. Default is ~-38 dB.
+threshold = 400
+"""
 
 
 @dataclass
@@ -21,15 +49,47 @@ class SourceInfo:
     description: str
 
 
+# --- Config ---
+
+def _hex_to_rgba(hex_str: str) -> tuple:
+    h = hex_str.strip().lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255)
+
+
+def load_config() -> None:
+    global _colors, _AUDIO_THRESHOLD
+    if not os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "w") as f:
+                f.write(_DEFAULT_CONFIG)
+        except OSError:
+            pass
+        return
+
+    cfg = configparser.ConfigParser()
+    cfg.read(CONFIG_PATH)
+    try:
+        _colors["active"]   = _hex_to_rgba(cfg.get("colors", "active",   fallback="#50DC50"))
+        _colors["inactive"] = _hex_to_rgba(cfg.get("colors", "inactive", fallback="#B4B4B4"))
+        _colors["accent"]   = _hex_to_rgba(cfg.get("colors", "accent",   fallback="#DC3C3C"))
+        _AUDIO_THRESHOLD    = float(cfg.get("audio", "threshold", fallback="400"))
+    except (ValueError, configparser.Error) as e:
+        print(f"Warning: config parse error ({e}), using defaults.", file=sys.stderr)
+
+
 # --- Icon rendering ---
 
-def create_icon(active: bool, muted: bool = False) -> Image.Image:
+def create_icon(monitoring: bool, audio_active: bool, muted: bool = False) -> Image.Image:
+    """
+    monitoring   — draws red dot badge (loopback/monitoring on)
+    audio_active — green mic when True and not muted, grey otherwise
+    muted        — draws red diagonal slash through the mic body
+    """
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Green when monitoring and unmuted, grey otherwise
-    mic_color = (80, 220, 80, 255) if (active and not muted) else (180, 180, 180, 255)
+    mic_color = _colors["active"] if (audio_active and not muted) else _colors["inactive"]
 
     # Mic body
     draw.rounded_rectangle([22, 4, 42, 36], radius=10, fill=mic_color)
@@ -40,13 +100,13 @@ def create_icon(active: bool, muted: bool = False) -> Image.Image:
     # Stand base
     draw.line([20, 58, 44, 58], fill=mic_color, width=4)
 
-    # Mute slash: red diagonal line through the mic body
+    # Mute slash: diagonal line through the mic body
     if muted:
-        draw.line([44, 4, 20, 38], fill=(220, 60, 60, 255), width=4)
+        draw.line([44, 4, 20, 38], fill=_colors["accent"], width=4)
 
-    # Recording dot badge: filled red circle in top-right corner when monitoring is active
-    if active:
-        draw.ellipse([46, 2, 62, 18], fill=(220, 60, 60, 255))
+    # Recording dot badge: filled circle in top-right corner when monitoring is active
+    if monitoring:
+        draw.ellipse([46, 2, 62, 18], fill=_colors["accent"])
 
     return img
 
@@ -104,11 +164,34 @@ def get_default_source() -> str:
     return result.stdout.strip()
 
 
-def get_default_source_muted() -> bool:
-    result = _run_pactl("get-source-mute", "@DEFAULT_SOURCE@")
+def _get_mute_from_list(source_name: str) -> bool:
+    """Fallback: parse mute state from `pactl list sources`."""
+    result = _run_pactl("list", "sources")
     if result is None or result.returncode != 0:
         return False
-    return "yes" in result.stdout.lower()
+    in_source = False
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Name:"):
+            in_source = source_name in stripped
+        elif in_source and stripped.startswith("Mute:"):
+            return "yes" in stripped.lower()
+        elif in_source and stripped.startswith("Name:"):
+            break  # moved past the target source
+    return False
+
+
+def get_default_source_muted() -> bool:
+    with _lock:
+        src = default_source_name
+    if not src:
+        return False
+    result = _run_pactl("get-source-mute", src)
+    if result is None or result.returncode != 0:
+        return _get_mute_from_list(src)
+    output = result.stdout.strip().lower()
+    # Handles "Mute: yes", "mute: yes", or bare "yes"
+    return output == "yes" or output.endswith(": yes")
 
 
 def enable_monitor(source_name: str) -> int | None:
@@ -158,16 +241,51 @@ def _mute_poll_loop(icon) -> None:
             update_icon(icon)
 
 
+def _audio_level_loop(icon) -> None:
+    """Persist a parecord process and update _audio_active from RMS level."""
+    global _audio_active, _audio_proc
+    CHUNK = 1600  # 100 ms at 8 kHz, int16 = 800 samples × 2 bytes
+    try:
+        _audio_proc = subprocess.Popen(
+            ["parecord", "--raw", "--channels=1", "--format=s16le",
+             "--rate=8000", "--latency-msec=100"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        print("Warning: parecord not found; audio activity detection disabled.", file=sys.stderr)
+        return
+
+    try:
+        while True:
+            data = _audio_proc.stdout.read(CHUNK)
+            if not data:
+                break  # process was terminated
+            n = len(data) // 2
+            if n == 0:
+                continue
+            samples = struct.unpack(f"{n}h", data[:n * 2])
+            rms = (sum(s * s for s in samples) / n) ** 0.5
+            new_active = rms > _AUDIO_THRESHOLD
+            with _lock:
+                changed = new_active != _audio_active
+                _audio_active = new_active
+            if changed:
+                update_icon(icon)
+    finally:
+        try:
+            _audio_proc.terminate()
+            _audio_proc.wait(timeout=2)
+        except Exception:
+            pass
+
+
 def update_icon(icon) -> None:
     with _lock:
         count = len(active_modules)
         muted = is_muted
-    if count > 0:
-        icon.icon = create_icon(True, muted)
-        icon.title = f"Mic Monitor: ON ({count} active)"
-    else:
-        icon.icon = create_icon(False, muted)
-        icon.title = "Mic Monitor: OFF"
+        audio = _audio_active
+    icon.icon = create_icon(count > 0, audio, muted)
+    icon.title = f"Mic Monitor: ON ({count} active)" if count > 0 else "Mic Monitor: OFF"
 
 
 def make_toggle_callback(source_name: str):
@@ -275,6 +393,15 @@ def refresh_callback(icon, item) -> None:
 
 def quit_app(icon, item) -> None:
     _mute_poll_stop.set()
+
+    # Stop the audio level subprocess so its thread unblocks and exits
+    global _audio_proc
+    if _audio_proc is not None:
+        try:
+            _audio_proc.terminate()
+        except Exception:
+            pass
+
     with _lock:
         modules_to_unload = dict(active_modules)
 
@@ -290,6 +417,8 @@ def quit_app(icon, item) -> None:
 # --- Entry point ---
 
 def main():
+    load_config()
+
     # Clean up any loopback modules left over from a crashed previous instance
     _run_pactl("unload-module", "module-loopback")
 
@@ -298,14 +427,14 @@ def main():
     menu = pystray.Menu(build_menu_items)
     icon = pystray.Icon(
         "mic-monitor",
-        create_icon(False),
+        create_icon(False, False),
         "Mic Monitor: OFF",
         menu=menu,
         on_activate=_on_activate,
     )
 
-    mute_thread = threading.Thread(target=_mute_poll_loop, args=(icon,), daemon=True)
-    mute_thread.start()
+    threading.Thread(target=_mute_poll_loop,    args=(icon,), daemon=True).start()
+    threading.Thread(target=_audio_level_loop,  args=(icon,), daemon=True).start()
 
     icon.run()
     _mute_poll_stop.set()
