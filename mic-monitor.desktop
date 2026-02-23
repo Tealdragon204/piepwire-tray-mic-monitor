@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mic Monitor
+Comment=Real-time microphone monitoring via PipeWire/PulseAudio
+Exec=/usr/bin/python3 /opt/mic-monitor-tray.py
+Icon=audio-input-microphone
+Terminal=false
+Categories=Audio;Utility;
+Keywords=microphone;monitor;pipewire;pulseaudio;tray;

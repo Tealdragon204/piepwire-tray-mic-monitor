@@ -59,24 +59,27 @@ sudo cp mic-monitor-tray.py /opt/mic-monitor-tray.py
 sudo chmod +x /opt/mic-monitor-tray.py
 ```
 
-### 4. Add to autostart
+### 4. Install the desktop entry
 
-Create a `.desktop` file so it launches with your session:
+Copy the included `.desktop` file so the app appears in your application launcher:
 
 ```sh
-mkdir -p ~/.config/autostart
-cat > ~/.config/autostart/mic-monitor.desktop << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=Mic Monitor
-Exec=/usr/bin/python3 /opt/mic-monitor-tray.py
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-EOF
+cp mic-monitor.desktop ~/.local/share/applications/
 ```
 
-Or add it through your desktop environment's startup application manager (GNOME Tweaks, KDE System Settings → Autostart, etc.).
+### 5. Add to autostart (optional)
+
+Use your desktop environment's built-in autostart manager to launch Mic Monitor at login:
+
+| DE | Where to find it |
+|---|---|
+| **GNOME** | GNOME Tweaks → Startup Applications |
+| **KDE Plasma** | System Settings → Autostart |
+| **XFCE** | Session and Startup → Application Autostart |
+| **MATE** | Control Center → Startup Applications |
+| **Cinnamon** | System Settings → Startup Applications |
+
+Search for **"Mic Monitor"** in the list — it will appear there once the desktop entry is installed.
 
 ## Usage
 
