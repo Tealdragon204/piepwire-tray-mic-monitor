@@ -1,4 +1,4 @@
-# piepwire-tray-mic-monitor
+# pipewire-tray-mic-monitor
 
 A Linux system tray application for real-time microphone monitoring via PipeWire or PulseAudio. Routes any connected audio input source through a low-latency loopback so you can hear yourself in headphones while recording or on a call.
 
