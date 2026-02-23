@@ -245,10 +245,18 @@ def _audio_level_loop(icon) -> None:
     """Persist a parecord process and update _audio_active from RMS level."""
     global _audio_active, _audio_proc
     CHUNK = 1600  # 100 ms at 8 kHz, int16 = 800 samples × 2 bytes
+
+    with _lock:
+        source = default_source_name
+
+    cmd = ["parecord", "--raw", "--channels=1", "--format=s16le",
+           "--rate=8000", "--latency-msec=100"]
+    if source:
+        cmd.append(f"--device={source}")
+
     try:
         _audio_proc = subprocess.Popen(
-            ["parecord", "--raw", "--channels=1", "--format=s16le",
-             "--rate=8000", "--latency-msec=100"],
+            cmd,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
     except FileNotFoundError:
