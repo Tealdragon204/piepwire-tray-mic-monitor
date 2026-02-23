@@ -10,6 +10,66 @@ A Linux system tray application for real-time microphone monitoring via PipeWire
 - **Refresh Sources** to detect newly plugged-in devices without restarting
 - Cleans up all loopback modules on quit (and on next launch if it crashed)
 
+## Getting the Code (New to GitHub? Start Here)
+
+If you've never used Git or GitHub before, this section walks you through getting the files onto your computer.
+
+### What is Git?
+
+**Git** is a tool that tracks changes to files. **GitHub** is a website where people share code using Git.
+**Cloning** a repository just means downloading a copy of the project to your computer so you can use or modify it.
+
+### Step 1 — Install Git
+
+Open a terminal (`Ctrl+Alt+T` on most desktops) and run the command for your distro:
+
+**Debian / Ubuntu:**
+```sh
+sudo apt install git
+```
+
+**Fedora:**
+```sh
+sudo dnf install git
+```
+
+**Arch:**
+```sh
+sudo pacman -S git
+```
+
+You can confirm it installed correctly by running:
+```sh
+git --version
+```
+You should see something like `git version 2.x.x`.
+
+### Step 2 — Clone this repository
+
+Navigate to a folder where you want to keep the project (your home folder is fine):
+```sh
+cd ~
+```
+
+Then clone the repo:
+```sh
+git clone https://github.com/Tealdragon204/pipewire-tray-mic-monitor.git
+```
+
+This creates a new folder called `pipewire-tray-mic-monitor` with all the project files inside.
+
+### Step 3 — Enter the project folder
+
+```sh
+cd pipewire-tray-mic-monitor
+```
+
+You're now inside the project and can follow the **Installation** steps below.
+
+> **Tip:** If the project is ever updated and you want the latest version, just run `git pull` from inside the folder.
+
+---
+
 ## Dependencies
 
 **System packages** (one of these audio stacks):
